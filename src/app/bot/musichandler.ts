@@ -559,7 +559,7 @@ export class YoutubeMusicPlayer {
         const expressServer = "http://localhost:3000"; // tempat express jalan
         const res = await fetch(`${expressServer}/youtube?url=${encodeURIComponent(url)}`);
         const data = await res.json() as any;
-        this.streamUrl = data;
+        this.streamUrl = data.stream;
         console.log(data);
         
         if (!data.stream) {
