@@ -408,13 +408,14 @@ export class YoutubeMusicPlayer {
   public YT_API_KEY: string;
   public looping: boolean = false;
   public lastTrack: { url: string; title: string } | null = null;
+  public streamUrl: string | null = null;
 
   constructor() {
     this.player = createAudioPlayer();
     this.player.on(AudioPlayerStatus.Idle, async () => {
       if (this.looping && this.lastTrack) {
         console.log(`🔁 Looping: ${this.lastTrack.title}`);
-        const stream = await this.streamAudio(this.lastTrack.url);
+        const stream = this.streamUrl as any;
         this.currentResource = createAudioResource(stream, {
           inlineVolume: true,
           metadata: this.lastTrack,
@@ -558,6 +559,7 @@ export class YoutubeMusicPlayer {
         const expressServer = "http://localhost:3000"; // tempat express jalan
         const res = await fetch(`${expressServer}/youtube?url=${encodeURIComponent(url)}`);
         const data = await res.json() as any;
+        this.streamUrl = data;
         console.log(data);
         
         if (!data.stream) {
