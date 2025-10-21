@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev:web": "next dev --turbopack",
+    "dev:web": "next dev --turbopack --port=4000",
     "dev:bot": "bun --bun run src/app/bot/main.ts",
     "dev": "concurrently \"bun run dev:web\" \"bun run dev:bot\"",
     "build": "next build --turbopack",
