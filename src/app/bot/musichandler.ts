@@ -578,7 +578,7 @@ export class YoutubeMusicPlayer {
 
         // Set initial volume
         if (this.currentResource.volume) {
-          this.currentResource.volume.setVolume(2.0);
+          this.currentResource.volume.setVolume(1.2);
         }
 
         // Play the resource
