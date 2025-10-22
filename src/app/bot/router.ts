@@ -11,10 +11,10 @@ import { exportClient } from "./main.js";
 import { VoiceChannel, GuildMember, TextChannel } from 'discord.js';
 import cors from "cors";
 import { getVoiceConnection } from "@discordjs/voice";
-import { disconnect } from "process";
+import { promisify } from "util";
 
 const music = new YoutubeMusicPlayer();
-
+const execAsync = promisify(exec);
 interface SlashCommand {
   name: string;
   description: string;
@@ -538,17 +538,19 @@ export function handleRouter(){
     });
 
      // Endpoint ambil stream URL YouTube
-    app.get("/youtube", (req, res) => {
+    app.get("/youtube", async (req, res) => {
       const url = req.query["url"] as string;
       if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada");
 
-      exec(`yt-dlp -f bestaudio[ext=m4a]/bestaudio -g "${url}"`, (err, stdout, stderr) => {
-        if (err) {
-          console.error("yt-dlp error:", stderr);
-          return res.status(500).send(stderr || err.message);
-        }
+      const command = `yt-dlp --cookies ./cookies.txt --force-ipv4 --referer https://www.youtube.com --add-header "Accept-Language: en-US,en;q=0.9" -f bestaudio/best -g "${url}"`;
+
+      try {
+        const { stdout } = await execAsync(command);
         res.json({ stream: stdout.trim() });
-      });
+      } catch (error: any) {
+        console.error("yt-dlp error:", error.stderr || error.message);
+        res.status(500).send(error.stderr || error.message);
+      }
     });
 
     app.post("/api/send-message", async (req, res) => {

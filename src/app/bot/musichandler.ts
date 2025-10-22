@@ -12,10 +12,11 @@ import {
   StreamType
 } from '@discordjs/voice';
 import { VoiceChannel, GuildMember } from 'discord.js';
-import * as YTDlpWrap from 'yt-dlp-wrap';
 import fetch from "node-fetch";
-import ytsr from 'ytsr';
+import {exec} from "child_process";
+import { promisify } from "util";
 
+const execAsync = promisify(exec);
 // Interface untuk data track
 interface SpotifyTrackInfo {
   title: string;
@@ -504,8 +505,23 @@ export class YoutubeMusicPlayer {
     }
   }
 
+  async searchWithYtDLP(query: string): Promise<string | null> {
+    try {
+      console.log("🔍 Searching with yt-dlp for:", query);
+      const { stdout } = await execAsync(`yt-dlp "ytsearch:${query}" --get-id --get-title`);
+      const [title, id] = stdout.trim().split('\n');
+      if (!id) throw new Error("ID tidak ditemukan");
+      console.log({ title, id });
+      return `https://www.youtube.com/watch?v=${id}`;
+    } catch (error) {
+      console.error("❌ Failed to search with yt-dlp:", error);
+      return null;
+    }
+  }
+
   async searchYoutubeAPI(query: string): Promise<string | null> {
     try {
+      let res;
       console.log("🔍 Searching YouTube API for:", query);
 
       const params = new URLSearchParams({
@@ -516,10 +532,12 @@ export class YoutubeMusicPlayer {
         key: this.YT_API_KEY!,
       });
 
-      const res = await fetch(`https://www.googleapis.com/youtube/v3/search?${params}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status} - ${res.statusText}`);
+      const finalUrl = `https://www.googleapis.com/youtube/v3/search?${params}`;
+      console.log("🔗 Final URL:", finalUrl);
+      res = await fetch(finalUrl);
+      if (!res.ok){ throw new Error(res.statusText); }
 
-      const data = await res.json() as any;
+      const data = await res?.json() as any;
 
       if (data.items && data.items.length > 0) {
         const video = data.items[0];
@@ -539,18 +557,23 @@ export class YoutubeMusicPlayer {
 
   async play(input: string): Promise<{ success: boolean; title?: string; error?: string }> {
     try {
-      let url = input;
+      let url = input as any;
       let title = input;
+      let searchResult: string | null = null;
 
       // If not a URL, search YouTube
       if (!this.isValidUrl(input)) {
         // console.log(`🔍 Searching for: ${input}`);
-        const searchResult = await this.searchYoutubeAPI(input);
+        searchResult = await this.searchYoutubeAPI(input);
         console.log(searchResult);
         if (!searchResult) {
-          return { success: false, error: 'Tidak dapat menemukan musik tersebut' };
+          console.log("Cari pakai yt-dlp");
+          searchResult = await this.searchWithYtDLP(input) as any;
+          console.log("Search result:", searchResult);
+          url = await searchResult;
+          // return { success: false, error: 'Tidak dapat menemukan musik tersebut' };
         }
-        url = searchResult;
+        url = await searchResult;
       }
 
       // Get video info
