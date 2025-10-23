@@ -242,7 +242,7 @@ const slashCommands: SlashCommand[] = [
     description: 'Menghentikan musik dan keluar dari voice channel',
     handler: async (req, res) => {
       try {
-        music.stop();
+        music.disconnect();
 
         return res.send({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,

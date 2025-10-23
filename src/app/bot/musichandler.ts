@@ -11,6 +11,7 @@ import {
   entersState,
   StreamType
 } from '@discordjs/voice';
+import prism from "prism-media";
 import { VoiceChannel, GuildMember } from 'discord.js';
 import fetch from "node-fetch";
 import {exec} from "child_process";
@@ -430,6 +431,7 @@ export class YoutubeMusicPlayer {
         console.log(`🔁 Looping: ${this.lastFilePath}`);
         const stream = fs.createReadStream(this.lastFilePath);
         this.currentResource = createAudioResource(stream, {
+          inputType: StreamType.Arbitrary,
           inlineVolume: true,
           metadata: this.lastFilePath,
         });
@@ -601,10 +603,10 @@ export class YoutubeMusicPlayer {
 
         const stream = fs.createReadStream(filePath);
 
-        this.currentResource = createAudioResource(stream as any, {
+        this.currentResource = createAudioResource(stream, {
           inputType: StreamType.Arbitrary,
           inlineVolume: true,
-          metadata: { title }
+          metadata: { title },
         });
 
         // Set initial volume
@@ -616,6 +618,10 @@ export class YoutubeMusicPlayer {
         this.player.play(this.currentResource);
         this.lastTrack = { url, title: title || 'Unknown' };
         console.log(`🎵 Now playing: ${title}`);
+        this.player.on(AudioPlayerStatus.Playing, () => console.log("🎶 Playing audio..."));
+        this.player.on(AudioPlayerStatus.Idle, () => console.log("🛑 Audio ended."));
+        this.player.on("error", e => console.error("Audio player error:", e));
+
 
         return { success: true, title };
       } catch (error) {
