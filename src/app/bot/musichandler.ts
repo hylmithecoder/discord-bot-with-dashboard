@@ -14,9 +14,13 @@ import {
 import { VoiceChannel, GuildMember } from 'discord.js';
 import fetch from "node-fetch";
 import {exec} from "child_process";
+import fs, { write } from "fs";
 import { promisify } from "util";
+import path from "path";
 
 const execAsync = promisify(exec);
+const musicDir = path.resolve('musics');
+
 // Interface untuk data track
 interface SpotifyTrackInfo {
   title: string;
@@ -45,7 +49,14 @@ interface SpotifySuccess {
   data: SpotifyTrackInfo;
 }
 
+interface MusicFormatJson {
+  title: string;
+  linkYt: string;
+  date?: Date;
+}
+
 type SpotifyResult = SpotifySuccess | SpotifyError;
+const historyMusicFile = "musics/history.json";
 
 class SpotifyService {
   public spotifyApi: SpotifyWebApi;
@@ -410,18 +421,19 @@ export class YoutubeMusicPlayer {
   public looping: boolean = false;
   public lastTrack: { url: string; title: string } | null = null;
   public streamUrl: string | null = null;
+  private lastFilePath: any;
 
   constructor() {
     this.player = createAudioPlayer();
     this.player.on(AudioPlayerStatus.Idle, async () => {
       if (this.looping && this.lastTrack) {
         console.log(`🔁 Looping: ${this.lastTrack.title}`);
-        const stream = this.streamUrl as any;
+        const stream = fs.createReadStream(this.lastFilePath);
         this.currentResource = createAudioResource(stream, {
           inlineVolume: true,
           metadata: this.lastTrack,
         });
-        this.currentResource.volume.setVolume(0.5);
+        this.currentResource.volume.setVolume(1.2);
         this.player.play(this.currentResource);
       }
     });
@@ -475,7 +487,6 @@ export class YoutubeMusicPlayer {
     });
 
     try {
-      // Kadang signalling lama, jadi kita tunggu dua tahap
       await entersState(this.connection, VoiceConnectionStatus.Signalling, 10_000)
         .catch(() => console.warn("⚠️ Still signalling... continuing"));
 
@@ -512,6 +523,7 @@ export class YoutubeMusicPlayer {
       const [title, id] = stdout.trim().split('\n');
       if (!id) throw new Error("ID tidak ditemukan");
       console.log({ title, id });
+      this.writeNewMusic( title,`https://www.youtube.com/watch?v=${id}`);
       return `https://www.youtube.com/watch?v=${id}`;
     } catch (error) {
       console.error("❌ Failed to search with yt-dlp:", error);
@@ -544,6 +556,7 @@ export class YoutubeMusicPlayer {
         const videoId = video.id.videoId;
         const title = video.snippet.title;
         console.log(`✅ Found: ${title}`);
+        this.writeNewMusic(title,`https://www.youtube.com/watch?v=${videoId}`);
         return `https://www.youtube.com/watch?v=${videoId}`;
       }
 
@@ -557,7 +570,7 @@ export class YoutubeMusicPlayer {
 
   async play(input: string): Promise<{ success: boolean; title?: string; error?: string }> {
     try {
-      let url = input as any;
+      let url = input;
       let title = input;
       let searchResult: string | null = null;
 
@@ -570,6 +583,9 @@ export class YoutubeMusicPlayer {
           console.log("Cari pakai yt-dlp");
           searchResult = await this.searchWithYtDLP(input) as any;
           console.log("Search result:", searchResult);
+          if (!searchResult) {
+            return { success: false, error: 'Tidak dapat menemukan musik ', title: input };
+          }
           url = await searchResult;
           // return { success: false, error: 'Tidak dapat menemukan musik tersebut' };
         }
@@ -578,20 +594,12 @@ export class YoutubeMusicPlayer {
 
       // Get video info
       try {        
-        // Ambil audio stream langsung
-        const expressServer = "http://localhost:3000"; // tempat express jalan
-        const res = await fetch(`${expressServer}/youtube?url=${encodeURIComponent(url)}`);
-        const data = await res.json() as any;
-        this.streamUrl = data.stream;
-        console.log(data);
-        
-        if (!data.stream) {
-          throw new Error("Tidak bisa mendapatkan audio stream URL dari server");
-        }
 
-        const audioResponse = await fetch(data.stream);
-        console.log(audioResponse);
-        const stream = audioResponse.body as any; // readable stream dari yt-dlp
+        const filePath = await this.downloadMusic(url);
+        this.lastFilePath = filePath;
+        if (!filePath) return { success: false, error: 'Gagal download musik', title };
+
+        const stream = fs.createReadStream(filePath);
 
         this.currentResource = createAudioResource(stream as any, {
           inputType: StreamType.Arbitrary,
@@ -620,6 +628,12 @@ export class YoutubeMusicPlayer {
     }
   }
 
+  ensureMusicDir() {
+    if (!fs.existsSync(musicDir)) {
+      fs.mkdirSync(musicDir, { recursive: true });
+    }
+  }
+
   async streamAudio(url: string) {
     // misalnya fetch stream dari endpoint Express /youtube kamu
     const res = await fetch(`http://localhost:3000/youtube?url=${encodeURIComponent(url)}`);
@@ -627,10 +641,102 @@ export class YoutubeMusicPlayer {
     const audioStream = data.stream;
     return audioStream;
   }
+  
+  readHistory(){
+    try {
+      console.log("Folder path: ", historyMusicFile);
+      if (!fs.existsSync(historyMusicFile)) {
+        return [];
+      }
+      const data = fs.readFileSync(historyMusicFile, 'utf8');
+      if (!data.trim()) { // kalau file kosong
+        return [];
+      }
+      return JSON.parse(data);
+    }
+      catch (err) {
+        console.error(err);
+        return [];
+    }
+  }
+  
+  getCurrentDateTime() {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }
+  
+  
+  writeNewMusic(title: string, linkYt: string) {
+    const historyFile = path.resolve('music_history.json');
+    const timestamp = this.getCurrentDateTime();
+    const [date, time] = timestamp.split(' ');
+
+    let musicList: any[] = [];
+    if (fs.existsSync(historyFile)) {
+      musicList = JSON.parse(fs.readFileSync(historyFile, 'utf-8'));
+    }
+
+    if (musicList.some((m) => m.linkYt === linkYt)) {
+      console.log('⚠️ Music already in history');
+      return;
+    }
+
+    const entry = { musicData: title, linkYt, date, time };
+    musicList.push(entry);
+    fs.writeFileSync(historyFile, JSON.stringify(musicList, null, 2), 'utf-8');
+  }
+
+   // ✅ Download jika file belum ada
+  async downloadMusic(url: string): Promise<string | null> {
+    this.ensureMusicDir();
+
+    try {
+      // clear cache
+      execAsync('yt-dlp --rm-cache-dir');
+
+      // ambil info dulu buat tau judul & nama file
+      const info = await execAsync(`yt-dlp -e ${url}`);
+      const rawTitle = info.stdout.trim();
+
+      // ubah karakter ilegal jadi spasi atau strip aja
+      const title = rawTitle
+      .replace(/[<>:"/\\|?*\x00-\x1F]/g, '') // hapus karakter ilegal
+      .replace(/\s+/g, ' ') // rapikan spasi berlebih
+      .replace(/\.+$/, '') // hapus titik di akhir
+      .trim() || 'Unknown_Song';
+
+      const filePath = path.join(musicDir, `${title}.mp3`);
+
+      // kalau udah ada, skip download
+      if (fs.existsSync(filePath)) {
+        console.log('🎵 File sudah ada:', filePath);
+        return filePath;
+      }
+
+      console.log('⬇️ Downloading:', title);
+      await execAsync(
+        `yt-dlp --extract-audio --audio-format mp3 -o "${filePath}" ${url}`
+      );
+
+      console.log('✅ Download complete:', filePath);
+      return filePath;
+    } catch (err) {
+      console.error('❌ Error saat download:', err);
+      return null;
+    }
+  }
 
   stop(): void {
     this.player.stop();
+    this.lastFilePath = null;
     this.cleanup();
+    this.disconnect();
   }
 
   pause(): void {

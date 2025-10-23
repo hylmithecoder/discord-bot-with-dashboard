@@ -10,11 +10,15 @@ import { SpotifyService, YoutubeMusicPlayer } from "./musichandler.js";
 import { exportClient } from "./main.js";
 import { VoiceChannel, GuildMember, TextChannel } from 'discord.js';
 import cors from "cors";
-import { getVoiceConnection } from "@discordjs/voice";
+import fs from "fs";
 import { promisify } from "util";
 
 const music = new YoutubeMusicPlayer();
 const execAsync = promisify(exec);
+// Cache untuk menghindari request berulang ke URL yang sama
+const cache = new Map<string, { stream: string; timestamp: number }>();
+const CACHE_TTL = 300000; // 5 menit aja (link YouTube cepet expire)
+
 interface SlashCommand {
   name: string;
   description: string;
@@ -238,7 +242,7 @@ const slashCommands: SlashCommand[] = [
     description: 'Menghentikan musik dan keluar dari voice channel',
     handler: async (req, res) => {
       try {
-        music.disconnect();
+        music.stop();
 
         return res.send({
           type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
@@ -480,7 +484,7 @@ export function handleRouter(){
     // Router Interactions
 
     app.use(cors({
-      origin: 'http://localhost:3001'
+      origin: 'http://localhost:4000'
     }));
 
     app.use(express.json());
@@ -542,14 +546,60 @@ export function handleRouter(){
       const url = req.query["url"] as string;
       if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada");
 
-      const command = `yt-dlp --cookies ./cookies.txt --force-ipv4 --referer https://www.youtube.com --add-header "Accept-Language: en-US,en;q=0.9" -f bestaudio/best -g "${url}"`;
-
       try {
-        const { stdout } = await execAsync(command);
-        res.json({ stream: stdout.trim() });
+        // Cek cache (5 menit)
+        const cached = cache.get(url);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+          console.log("✅ Using cached URL");
+          return proxyStream(cached.stream, res, req);
+        }
+
+        // Strategi terbaik untuk avoid 403
+        const strategies = [
+          // Strategi 1: Android client (paling stabil)
+          `yt-dlp --cookies ./cookies.txt --extractor-args "youtube:player_client=android" -f bestaudio -g "${url}"`,
+          
+          // Strategi 2: iOS client
+          `yt-dlp --cookies ./cookies.txt --extractor-args "youtube:player_client=ios" -f bestaudio -g "${url}"`,
+          
+          // Strategi 3: Web with full headers
+          `yt-dlp --cookies ./cookies.txt --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --referer "https://www.youtube.com/" -f bestaudio -g "${url}"`,
+          
+          // Strategi 4: Simple (fallback)
+          `yt-dlp -f bestaudio -g "${url}"`,
+        ];
+
+        let streamUrl = "";
+        for (const command of strategies) {
+          try {
+            const { stdout } = await execAsync(command, { timeout: 15000 });
+            streamUrl = stdout.trim();
+            if (streamUrl) {
+              console.log(streamUrl);
+              console.log("✅ Got stream URL");
+              break;
+            }
+          } catch (err) {
+            continue;
+          }
+        }
+
+        if (!streamUrl) {
+          return res.status(500).json({
+            error: "Failed to get stream URL",
+            tip: "Update yt-dlp: pip install -U yt-dlp",
+          });
+        }
+
+        // Cache URL baru
+        cache.set(url, { stream: streamUrl, timestamp: Date.now() });
+
+        // PENTING: Proxy stream lewat server kamu, jangan return raw URL!
+        await proxyStream(streamUrl, res, req);
+        
       } catch (error: any) {
-        console.error("yt-dlp error:", error.stderr || error.message);
-        res.status(500).send(error.stderr || error.message);
+        console.error("Error:", error.message);
+        res.status(500).json({ error: error.message });
       }
     });
 
@@ -584,6 +634,75 @@ export function handleRouter(){
     });
 }
 
+// Fungsi untuk proxy stream dari Google ke client
+async function proxyStream(streamUrl: string, res: any, req: any) {
+  try {
+    // Headers yang dibutuhin Google Video server
+    const headers = {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Accept": "*/*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Origin": "https://www.youtube.com",
+      "Referer": "https://www.youtube.com/",
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "cross-site",
+    } as any;
+
+    // Support Range request untuk seeking
+    if (req.headers.range) {
+      headers["Range"] = req.headers.range;
+    }
+
+    const response = await fetch(streamUrl, { headers }) as any;
+
+    if (!response.ok) {
+      console.error("❌ Google returned:", response.status);
+      return res.status(response.status).json({
+        error: "Stream unavailable",
+        status: response.status,
+      });
+    }
+
+    // Forward response headers
+    res.setHeader("Content-Type", response.headers.get("content-type") || "audio/webm");
+    
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      res.setHeader("Content-Length", contentLength);
+    }
+
+    const contentRange = response.headers.get("content-range");
+    if (contentRange) {
+      res.setHeader("Content-Range", contentRange);
+      res.status(206); // Partial content
+    }
+
+    // Enable CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Accept-Ranges", "bytes");
+
+    // Pipe stream ke client
+    response.body.pipe(res);
+
+  } catch (error: any) {
+    console.error("Proxy error:", error.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Proxy failed: " + error.message });
+    }
+  }
+}
+
+// Bersihkan cache tiap 10 menit
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, value] of cache.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      cache.delete(key);
+    }
+  }
+  console.log(`🧹 Cache cleaned. Current size: ${cache.size}`);
+}, 600000);
 
 // === HELPER FUNCTION TO ADD NEW COMMAND ===
 export function addSlashCommand(command: SlashCommand) {
