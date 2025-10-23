@@ -426,12 +426,12 @@ export class YoutubeMusicPlayer {
   constructor() {
     this.player = createAudioPlayer();
     this.player.on(AudioPlayerStatus.Idle, async () => {
-      if (this.looping && this.lastTrack) {
-        console.log(`🔁 Looping: ${this.lastTrack.title}`);
+      if (this.looping && this.lastFilePath) {
+        console.log(`🔁 Looping: ${this.lastFilePath}`);
         const stream = fs.createReadStream(this.lastFilePath);
         this.currentResource = createAudioResource(stream, {
           inlineVolume: true,
-          metadata: this.lastTrack,
+          metadata: this.lastFilePath,
         });
         this.currentResource.volume.setVolume(1.2);
         this.player.play(this.currentResource);
@@ -735,8 +735,9 @@ export class YoutubeMusicPlayer {
   stop(): void {
     this.player.stop();
     this.lastFilePath = null;
+    this.looping = false;
     this.cleanup();
-    this.disconnect();
+    // this.disconnect();
   }
 
   pause(): void {

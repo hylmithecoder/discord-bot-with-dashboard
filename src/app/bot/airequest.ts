@@ -99,11 +99,52 @@ export class AIService {
   }
 
   // Send request to llama.cpp
-  async sendRequest(prompt: string): Promise<{ success: boolean; response?: string; error?: string }> {
+  async sendRequest(prompt: string, file?: { url: string; contentType: string; filename: string }): Promise<{ success: boolean; response?: string; error?: string }> {
     try {
       console.log(`🤖 Sending Gemini request: "${prompt.substring(0, 50)}..."`);
-      console.log(this.baseUrl);
-      console.log(this.apiKey);
+      
+      const parts: any[] = [{ text: prompt.trim() }];
+
+      // Handle file attachment
+      if (file) {
+        console.log(`📎 Processing file: ${file.filename} (${file.contentType})`);
+        
+        // Download file dari Discord CDN
+        const fileResponse = await fetch(file.url);
+        if (!fileResponse.ok) {
+          throw new Error(`Failed to download file: ${fileResponse.statusText}`);
+        }
+
+        const fileBuffer = await fileResponse.arrayBuffer();
+        const base64Data = Buffer.from(fileBuffer).toString('base64');
+
+        // Determine MIME type
+        let mimeType = file.contentType;
+        if (!mimeType && file.filename) {
+          // Fallback mime type detection
+          const ext = file.filename.split('.').pop()?.toLowerCase();
+          const mimeMap: Record<string, string> = {
+            'pdf': 'application/pdf',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+          };
+          mimeType = mimeMap[ext || ''] || 'application/octet-stream';
+        }
+
+        // Add inline data to parts
+        parts.push({
+          inline_data: {
+            mime_type: mimeType,
+            data: base64Data
+          }
+        });
+
+        console.log(`✅ File converted to base64 (${mimeType})`);
+      }
+
       const response = await fetch(`${this.baseUrl}?key=${this.apiKey}`, {
         method: 'POST',
         headers: {
@@ -111,19 +152,18 @@ export class AIService {
         },
         body: JSON.stringify({
           contents: [{
-            parts: [{
-              text: prompt.trim()
-            }]
+            parts: parts
           }]
         })
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(`HTTP ${response.status}: ${errorData?.error?.message || response.statusText}`);
       }
 
       const data = await response.json() as GeminiResponse;
-      
+
       if (data.error) {
         return {
           success: false,
@@ -132,7 +172,7 @@ export class AIService {
       }
 
       const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
+
       if (!content) {
         return {
           success: false,

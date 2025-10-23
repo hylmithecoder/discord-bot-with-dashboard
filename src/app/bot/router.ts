@@ -336,12 +336,19 @@ const slashCommands: SlashCommand[] = [
       {
         name: "message",
         description: "Pesan yang ingin ditanyakan",
-        type: 3,
+        type: 3, // STRING
         required: true
+      },
+      {
+        name: "file",
+        description: "File yang ingin diupload (PDF/Gambar)",
+        type: 11, // ATTACHMENT
+        required: false
       }
     ],
     handler: async (req, res) => {
-      const message = req.body.data.options?.[0].value;
+      const message = req.body.data.options?.find((opt: any) => opt.name === 'message')?.value;
+      const fileOption = req.body.data.options?.find((opt: any) => opt.name === 'file');
       const userId = req.body.member?.user?.id || req.body.user?.id;
 
       if (!message?.trim()) {
@@ -359,22 +366,33 @@ const slashCommands: SlashCommand[] = [
       try {
         console.log(`📝 AI Request from ${userId}: "${message.substring(0, 300)}..."`);
         
-        // Format prompt dan kirim ke AI
-        // const formattedPrompt = aiService.formatPrompt(message);
-        const aiResult = await aiService.sendRequest(message);
+        // Process file attachment if exists
+        let fileData = undefined;
+        if (fileOption) {
+          const attachment = req.body.data.resolved?.attachments?.[fileOption.value];
+          if (attachment) {
+            fileData = {
+              url: attachment.url,
+              contentType: attachment.content_type,
+              filename: attachment.filename
+            };
+            console.log(`📎 File attached: ${fileData.filename}`);
+          }
+        }
+
+        // Send to AI with optional file
+        const aiResult = await aiService.sendRequest(message, fileData);
         console.log(aiResult);
 
         if (!aiResult.success || !aiResult.response) {
           throw new Error(aiResult.error || 'Tidak ada respon dari AI');
         }
 
-        // Format response dengan pembersihan markdown dan line breaks
+        // Format response
         const formattedResponse = aiService.formatAIResponse(aiResult.response, userId);
-
-        // Split response jika terlalu panjang untuk Discord (2000 char limit)
         const responseChunks = aiService.splitLongMessage(formattedResponse);
 
-        // Update deferred message dengan chunk pertama
+        // Update deferred message
         await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -383,9 +401,9 @@ const slashCommands: SlashCommand[] = [
           })
         });
 
-        // Kirim chunk tambahan jika ada
+        // Send additional chunks
         for (let i = 1; i < responseChunks.length; i++) {
-          await new Promise(resolve => setTimeout(resolve, 1000)); // Delay 1 detik antar pesan
+          await new Promise(resolve => setTimeout(resolve, 1000));
           
           await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}`, {
             method: 'POST',
@@ -401,12 +419,11 @@ const slashCommands: SlashCommand[] = [
       } catch (error) {
         console.error('❌ AI command error:', error instanceof Error ? error.message : 'Unknown error');
         
-        // Update deferred message with error
         return await fetch(`https://discord.com/api/v10/webhooks/${req.body.application_id}/${req.body.token}/messages/@original`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: `❌ Terjadi kesalahan saat berkomunikasi dengan AI: ${error instanceof Error ? error.message : 'Unknown error'}`
+            content: `❌ Terjadi kesalahan: ${error instanceof Error ? error.message : 'Unknown error'}`
           })
         });
       }
