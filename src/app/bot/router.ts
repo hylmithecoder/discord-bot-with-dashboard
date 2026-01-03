@@ -559,65 +559,20 @@ export function handleRouter(){
     });
 
      // Endpoint ambil stream URL YouTube
-    app.get("/youtube", async (req, res) => {
+    // Endpoint ambil stream URL YouTube
+    app.get("/youtube", (req, res) => {
       const url = req.query["url"] as string;
       if (!url) return res.status(400).send("⚠️ query ?url=... wajib ada");
+      const clearResponse = exec(`yt-dlp --rm-cache-dir`);
 
-      try {
-        // Cek cache (5 menit)
-        const cached = cache.get(url);
-        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-          console.log("✅ Using cached URL");
-          return proxyStream(cached.stream, res, req);
+      console.log(clearResponse);
+      exec(`yt-dlp -f bestaudio/best -g --user-agent "Mozilla/5.0" "${url}"`, (err, stdout, stderr) => {
+        if (err) {
+          console.error("yt-dlp error:", stderr);
+          return res.status(500).send(stderr || err.message);
         }
-
-        // Strategi terbaik untuk avoid 403
-        const strategies = [
-          // Strategi 1: Android client (paling stabil)
-          `yt-dlp --cookies ./cookies.txt --extractor-args "youtube:player_client=android" -f bestaudio -g "${url}"`,
-          
-          // Strategi 2: iOS client
-          `yt-dlp --cookies ./cookies.txt --extractor-args "youtube:player_client=ios" -f bestaudio -g "${url}"`,
-          
-          // Strategi 3: Web with full headers
-          `yt-dlp --cookies ./cookies.txt --user-agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --referer "https://www.youtube.com/" -f bestaudio -g "${url}"`,
-          
-          // Strategi 4: Simple (fallback)
-          `yt-dlp -f bestaudio -g "${url}"`,
-        ];
-
-        let streamUrl = "";
-        for (const command of strategies) {
-          try {
-            const { stdout } = await execAsync(command, { timeout: 15000 });
-            streamUrl = stdout.trim();
-            if (streamUrl) {
-              console.log(streamUrl);
-              console.log("✅ Got stream URL");
-              break;
-            }
-          } catch (err) {
-            continue;
-          }
-        }
-
-        if (!streamUrl) {
-          return res.status(500).json({
-            error: "Failed to get stream URL",
-            tip: "Update yt-dlp: pip install -U yt-dlp",
-          });
-        }
-
-        // Cache URL baru
-        cache.set(url, { stream: streamUrl, timestamp: Date.now() });
-
-        // PENTING: Proxy stream lewat server kamu, jangan return raw URL!
-        await proxyStream(streamUrl, res, req);
-        
-      } catch (error: any) {
-        console.error("Error:", error.message);
-        res.status(500).json({ error: error.message });
-      }
+        res.json({ stream: stdout.trim() });
+      });
     });
 
     app.post("/api/send-message", async (req, res) => {

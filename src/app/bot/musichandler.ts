@@ -603,10 +603,10 @@ export class YoutubeMusicPlayer {
 
         const stream = fs.createReadStream(filePath);
 
-        this.currentResource = createAudioResource(stream, {
+        this.currentResource = createAudioResource(stream as any, {
           inputType: StreamType.Arbitrary,
           inlineVolume: true,
-          metadata: { title },
+          metadata: { title }
         });
 
         // Set initial volume
@@ -617,6 +617,7 @@ export class YoutubeMusicPlayer {
         // Play the resource
         this.player.play(this.currentResource);
         this.lastTrack = { url, title: title || 'Unknown' };
+        console.log("Last Track Metadata: ", this.lastTrack);
         console.log(`🎵 Now playing: ${title}`);
         this.player.on(AudioPlayerStatus.Playing, () => console.log("🎶 Playing audio..."));
         this.player.on(AudioPlayerStatus.Idle, () => console.log("🛑 Audio ended."));
@@ -640,10 +641,11 @@ export class YoutubeMusicPlayer {
     }
   }
 
-  async streamAudio(url: string) {
+  async streamAudio(url: string): Promise<any> {
     // misalnya fetch stream dari endpoint Express /youtube kamu
     const res = await fetch(`http://localhost:3000/youtube?url=${encodeURIComponent(url)}`);
     const data = await res.json() as any;
+    console.log(data);
     const audioStream = data.stream;
     return audioStream;
   }
